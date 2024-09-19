@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flowise Chat with TTS</title>
+  <style>
+    /* Styles for the toggle button */
+    .toggle-container {
+      z-index: 100;
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      display: flex;
+      align-items: center;
+    }
+
+    .toggle-button {
+      appearance: none;
+      width: 60px;
+      height: 34px;
+      background-color: #87ceeb;
+      /* Sky blue */
+      border-radius: 34px;
+      outline: none;
+      border: 1px solid #ddd;
+      cursor: pointer;
+      position: relative;
+      transition: background-color 0.3s;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      display: flex;
+    }
+
+    .toggle-button:before {
+      content: '';
+      transform: translateY(2px);
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: white;
+      transition: transform 0.3s;
+    }
+
+    .toggle-button.active {
+      background-color: #ff6347;
+      /* Tomato color when active */
+    }
+
+    .toggle-button.active:before {
+      transform: translate(20px, 2px);
+    }
+
+    .toggle-label {
+      margin-left: 15px;
+      font-size: 16px;
+      font-weight: bold;
+      color: #333;
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+      transition: color 0.3s, text-shadow 0.3s;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <div class="toggle-container">
+    <button id="toggle-button" class="toggle-button"></button>
+    <span id="toggle-label" class="toggle-label">TTS: ON</span>
+  </div>
+
+  <flowise-fullchatbot></flowise-fullchatbot>
+  <script type="module">
+    import Chatbot from "YOUR_CHATBOT_MODULE_PATH";
+    Chatbot.initFull({
+      chatflowid: "YOUR_CHATFLOW_ID",
+      apiHost: "YOUR_API_HOST",
+    });
+
+
+    const elevenLabsApiKey = "YOUR_ELEVENLABS_API_KEY";
+    const elevenLabsApiUrl = 'https://api.elevenlabs.io/v1/text-to-speech';
+    const voiceId = 'ELEVENLABS_VOICE_ID';
+
+    // Toggle for TTS
+    let ttsEnabled = true;
+
+    // Message queue to ensure sequential processing with delay
+    const messageQueue = [];
+    let isPlaying = false;
+
+    // Function to convert text to speech using ElevenLabs API
+    async function textToSpeech(text) {
+      if (!ttsEnabled) return; // If TTS is disabled, don't process the message
+
+      try {
+        const response = await fetch(`${elevenLabsApiUrl}/${voiceId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'xi-api-key': elevenLabsApiKey,
+          },
+          body: JSON.stringify({
+            text,
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75
+            }
+          }),
+        });
+
+        if (!response.ok) {
+          const errorResponse = await response.json();
+          console.error('Error response:', errorResponse);
+          throw new Error(`Error ${response.status}: ${errorResponse.message}`);
+        }
+
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        // Create an audio element and play the audio
+        const audio = new Audio(audioUrl);
+        audio.play();
+
+        // Wait for the current audio to finish before processing the next message
+        audio.onended = () => {
+          console.log('Audio finished playing.');
+          isPlaying = false;
+
+          // Delay the next message by 200ms
+          setTimeout(() => {
+            playNextMessage();
+          }, 200);
+        };
+      } catch (error) {
+        console.error('Error with TTS:', error);
+        isPlaying = false;
+
+        // Delay the next message by 200ms even if there is an error
+        setTimeout(() => {
+          playNextMessage();
+        }, 200);
+      }
+    }
+
+    // Function to play the next message in the queue
+    function playNextMessage() {
+      if (messageQueue.length > 0 && !isPlaying) {
+        const nextMessage = messageQueue.shift();
+        console.log('Playing next message:', nextMessage);
+        isPlaying = true;
+        textToSpeech(nextMessage);
+      }
+    }
+
+    // Add message to queue and process if not already playing
+    function queueMessage(messageText) {
+      if (ttsEnabled) {
+        messageQueue.push(messageText);
+        console.log('Message queued:', messageText);
+        if (!isPlaying) {
+          playNextMessage();
+        }
+      }
+    }
+
+    // Function to start observing the Shadow DOM
+    function startObserving() {
+      setTimeout(() => {
+      const flowiseElement = document.querySelector('flowise-fullchatbot');
+      if (!flowiseElement) {
+        console.error('Chatbot element not found.');
+        return;
+      } else {
+        console.log('Chatbot element found:', flowiseElement);
+      }
+
+      const shadowRoot = flowiseElement.shadowRoot;
+      if (!shadowRoot) {
+        console.error('Shadow root not found.');
+        return;
+      } else {
+        console.log('Shadow root found:', shadowRoot);
+      }
+
+        const container = shadowRoot.querySelector('.chatbot-container');
+        if (!container) {
+          console.error('chatbot-Container element not found inside shadow root.');
+          return;
+        } else {
+          console.log('Container element found:', container);
+        }
+        
+        // Process existing messages
+        
+        let debounceTimeout;
+        const DEBOUNCE_DELAY = 500;
+        
+        
+      const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+          if (mutation.addedNodes.length > 0) {
+            mutation.addedNodes.forEach(node => {
+              if (node.nodeType === Node.ELEMENT_NODE) {
+
+                const spanInsideNode = node.querySelector('.chatbot-host-bubble, .chatbot-guest-bubble');
+                
+                if (spanInsideNode) {
+                  console.log("New part of the message detected:", spanInsideNode.textContent);
+
+                  clearTimeout(debounceTimeout);
+                  
+                  debounceTimeout = setTimeout(() => {
+                    const messageText = spanInsideNode.textContent;
+                    console.log('Final message text:', messageText);
+                    queueMessage(messageText);
+                  }, DEBOUNCE_DELAY);
+                }
+              }
+            });
+          }
+        });
+      });
+      
+      observer.observe(container, { childList: true, subtree: true });
+    }, 500);  // Delay of 2000 milliseconds (2 seconds)
+    }
+
+    // Wait for the chatbot to initialize before starting observation
+    window.addEventListener('load', startObserving);
+    
+    // Toggle TTS on/off and log status
+    document.getElementById('toggle-button').addEventListener('click', function () {
+      ttsEnabled = !ttsEnabled; // Toggle the TTS enabled state
+      const toggleLabel = document.getElementById('toggle-label');
+      this.classList.toggle('active');
+      toggleLabel.textContent = `TTS: ${ttsEnabled ? 'ON' : 'OFF'}`; // Update button text
+      const statusMessage = `TTS is now ${ttsEnabled ? 'enabled' : 'disabled'}.`;
+      console.log(statusMessage);
+    });
+
+  </script>
+</body>
+
+</html>
